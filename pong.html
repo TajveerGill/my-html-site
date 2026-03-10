@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>PONG</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      width: 100%;
+      background: #000;
+      color: #0f0;
+      font-family: 'Courier New', monospace;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+    }
+    h1 { letter-spacing: 4px; margin: 10px 0; font-size: 100px; }
+
+    #gameContainer {
+      position: relative;
+      margin-top: 20px;
+      box-shadow: 0 0 20px #0f0, 0 0 20px #38bdf8;
+    }
+
+    canvas {
+      background: #000;
+      display: none;
+      image-rendering: pixelated;
+    }
+
+    button, input, select, label {
+      margin-top: 8px;
+      padding: 6px 14px;
+      font-family: 'Courier New', monospace;
+      font-size: 16px;
+      background: #000;
+      color: #0f0;
+      border: 2px solid #0f0;
+      cursor: pointer;
+      box-shadow: 0 0 10px #0f0;
+    }
+
+    .settings {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+    }
+
+    #controlsInfo {
+      margin-top: 10px;
+      padding: 10px;
+      border: 2px solid #0f0;
+      width: 300px;
+      text-align: left;
+    }
+
+    #mobileControls {
+      display: none;
+      width: 600px;
+      justify-content: space-between;
+      margin-top: 10px;
+    }
+
+    #mobileControls button {
+      width: 70px;
+      height: 50px;
+      font-size: 22px;
+    }
+  </style>
+</head>
+<body>
+  <h1>PONG</h1>
+
+  <div class="settings" id="settings">
+    <label>Points to Win (0 = ∞)</label>
+    <input type="number" id="winInput" value="5" min="0">
+
+    <label>AI Opponent</label>
+    <select id="aiSelect">
+      <option value="off">Off</option>
+      <option value="easy">Easy</option>
+      <option value="medium">Medium</option>
+      <option value="hard">Hard</option>
+    </select>
+
+    <label>Touch Controls</label>
+    <select id="touchSelect">
+      <option value="off">Off</option>
+      <option value="on">On</option>
+    </select>
+
+    <label>Ball Speed Increase</label>
+    <select id="speedSelect">
+      <option value="on">On</option>
+      <option value="off">Off</option>
+    </select>
+
+    <div id="controlsInfo">
+      <strong>Controls:</strong><br>
+      Player 1: W = Up, S = Down<br>
+      Player 2: ↑ = Up, ↓ = Down<br>
+      Mobile: Use on-screen buttons if Touch Controls are ON
+    </div>
+  </div>
+
+  <button id="startBtn">START</button>
+  <button id="exitBtn" style="display:none;">EXIT</button>
+
+  <div id="gameContainer">
+    <canvas id="game" width="600" height="400"></canvas>
+  </div>
+
+  <div id="mobileControls">
+    <div>
+      <button id="leftUp">▲</button>
+      <button id="leftDown">▼</button>
+    </div>
+    <div>
+      <button id="rightUp">▲</button>
+      <button id="rightDown">▼</button>
+    </div>
+  </div>
+
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const startBtn = document.getElementById('startBtn');
+const exitBtn = document.getElementById('exitBtn');
+const settings = document.getElementById('settings');
+const mobileControls = document.getElementById('mobileControls');
+
+const paddleHeight = 60;
+const paddleWidth = 8;
+let leftY, rightY;
+let ballX, ballY, ballVX, ballVY;
+let speedMultiplier = 1.05;
+let speedIncreaseEnabled = true;
+let leftScore = 0, rightScore = 0;
+let pointsToWin = 5;
+let aiDifficulty = 'off';
+let gameRunning = false;
+let countdown = 0;
+let ballActive = true;
+let aiTargetY = 0;
+let aiTimer = 0;
+let gameOver = false;
+const keys = {};
+
+function setupTouchButtons() {
+  const map = [
+    ['leftUp','w'], ['leftDown','s'],
+    ['rightUp','ArrowUp'], ['rightDown','ArrowDown']
+  ];
+
+  map.forEach(([id, key]) => {
+    const btn = document.getElementById(id);
+    const press = e => { e.preventDefault(); keys[key] = true; };
+    const release = e => { e.preventDefault(); keys[key] = false; };
+
+    btn.addEventListener('touchstart', press, { passive:false });
+    btn.addEventListener('touchend', release, { passive:false });
+    btn.addEventListener('touchcancel', release, { passive:false });
+
+    btn.addEventListener('mousedown', press);
+    btn.addEventListener('mouseup', release);
+    btn.addEventListener('mouseleave', release);
+  });
+}
+
+addEventListener('keydown', e => keys[e.key] = true);
+addEventListener('keyup', e => keys[e.key] = false);
+
+function resetBall(lastScorer) {
+  if(gameOver) return;
+  ballX = canvas.width / 2;
+  ballY = canvas.height / 2;
+  const baseVX = (lastScorer === 'left') ? -4 : 4;
+  const baseVY = Math.random() > 0.5 ? 3 : -3;
+  ballVX = baseVX;
+  ballVY = baseVY;
+  countdown = 180;
+  ballActive = false;
+}
+
+function resetGame() {
+  leftY = rightY = canvas.height / 2 - paddleHeight / 2;
+  leftScore = rightScore = 0;
+  gameOver = false;
+  resetBall('left');
+}
+
+function draw() {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  ctx.fillStyle = '#001a00';
+  ctx.fillRect(0,0,canvas.width/2,canvas.height);
+  ctx.fillStyle = '#001020';
+  ctx.fillRect(canvas.width/2,0,canvas.width/2,canvas.height);
+
+  ctx.setLineDash([8,8]);
+  ctx.strokeStyle = '#fff';
+  ctx.beginPath();
+  ctx.moveTo(canvas.width/2,0);
+  ctx.lineTo(canvas.width/2,canvas.height);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.fillStyle = '#0f0';
+  ctx.fillRect(0,leftY,paddleWidth,paddleHeight);
+  ctx.fillStyle = '#38bdf8';
+  ctx.fillRect(canvas.width-paddleWidth,rightY,paddleWidth,paddleHeight);
+
+  if(ballActive){
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(ballX,ballY,8,8);
+  } else if(countdown>0){
+    ctx.font = '36px monospace';
+    ctx.fillStyle = '#fff';
+    ctx.textAlign = 'center';
+    ctx.fillText(Math.ceil(countdown/60),canvas.width/2,canvas.height/2);
+  }
+
+  ctx.font = '36px monospace';
+  ctx.fillStyle = '#0f0';
+  ctx.fillText(leftScore,canvas.width/4,40);
+  ctx.fillStyle = '#38bdf8';
+  ctx.fillText(rightScore,canvas.width*3/4,40);
+
+  if(aiDifficulty!=='off'){
+    ctx.font = 'bold 48px monospace';
+    ctx.fillStyle = '#38bdf8';
+    ctx.textAlign = 'center';
+    ctx.fillText('AI', canvas.width*3/4, canvas.height/2);
+  }
+
+  if(gameOver){
+    ctx.font = '36px monospace';
+    ctx.fillStyle = leftScore > rightScore ? '#0f0' : '#38bdf8';
+    ctx.textAlign = 'center';
+    ctx.fillText(leftScore > rightScore ? 'GREEN WINS' : 'BLUE WINS', canvas.width/2, canvas.height/2);
+  }
+}
+
+function update(){
+  if(!gameRunning) return;
+  if(gameOver) return;
+
+  if(aiDifficulty!=='off'){
+    aiTimer--;
+    if(aiTimer<=0 && ballVX>0){
+      const err = aiDifficulty==='easy'?80:aiDifficulty==='medium'?50:10;
+      aiTargetY = Math.max(0,Math.min(canvas.height-paddleHeight,ballY-paddleHeight/2+(Math.random()-0.5)*err));
+      aiTimer = aiDifficulty==='easy'?14:aiDifficulty==='medium'?10:3;
+    }
+    const spd = aiDifficulty==='easy'?3.1:aiDifficulty==='medium'?3.8:6.0;
+    if(rightY+paddleHeight/2<aiTargetY) rightY = Math.min(canvas.height-paddleHeight, rightY+spd);
+    if(rightY+paddleHeight/2>aiTargetY) rightY = Math.max(0, rightY-spd);
+  }
+
+  if(keys['w']) leftY=Math.max(0,leftY-4);
+  if(keys['s']) leftY=Math.min(canvas.height-paddleHeight,leftY+4);
+  if(aiDifficulty==='off'){
+    if(keys['ArrowUp']) rightY=Math.max(0,rightY-4);
+    if(keys['ArrowDown']) rightY=Math.min(canvas.height-paddleHeight,rightY+4);
+  }
+
+  if(ballActive){
+    ballX+=ballVX;
+    ballY+=ballVY;
+  }
+
+  if(ballY<=0||ballY>=canvas.height-8) ballVY*=-1;
+
+  if(ballX<=paddleWidth && ballY+8>=leftY && ballY<=leftY+paddleHeight){
+    ballVX = speedIncreaseEnabled ? Math.abs(ballVX)*speedMultiplier : Math.abs(ballVX);
+  }
+  if(ballX>=canvas.width-paddleWidth-8 && ballY+8>=rightY && ballY<=rightY+paddleHeight){
+    ballVX = speedIncreaseEnabled ? -Math.abs(ballVX)*speedMultiplier : -Math.abs(ballVX);
+  }
+
+  if(ballActive && ballX<0){
+    rightScore++;
+    if(pointsToWin>0 && rightScore>=pointsToWin){ gameOver=true; ballActive=false; }
+    else resetBall('right');
+  }
+  if(ballActive && ballX>canvas.width){
+    leftScore++;
+    if(pointsToWin>0 && leftScore>=pointsToWin){ gameOver=true; ballActive=false; }
+    else resetBall('left');
+  }
+
+  if(!ballActive && countdown>0){ countdown--; if(countdown===0) ballActive=true; }
+
+  draw();
+  requestAnimationFrame(update);
+}
+
+startBtn.onclick=()=>{
+  pointsToWin=parseInt(winInput.value)||0;
+  aiDifficulty=aiSelect.value;
+  speedIncreaseEnabled = speedSelect.value==='on';
+  gameRunning=true;
+  settings.style.display='none';
+  startBtn.style.display='none';
+  exitBtn.style.display='block';
+  canvas.style.display='block';
+
+  if(touchSelect.value==='on'){
+    mobileControls.style.display='flex';
+    setupTouchButtons();
+  }
+
+  resetGame();
+  update();
+};
+
+exitBtn.onclick=()=>{
+  gameRunning=false;
+  canvas.style.display='none';
+  mobileControls.style.display='none';
+  settings.style.display='flex';
+  startBtn.style.display='block';
+  exitBtn.style.display='none';
+};
+</script>
+</body>
+</html>
